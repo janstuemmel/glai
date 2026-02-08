@@ -5,6 +5,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/charmbracelet/glamour"
 )
@@ -32,11 +34,17 @@ func clamp(x, min, max int) int {
 }
 
 func adaptiveThreshold(bufLen int) int {
-	t := 32 + int(math.Sqrt(float64(bufLen)))*4
+	t := 32 + int(math.Sqrt(float64(bufLen)))*2
 	return clamp(t, 32, 16*1024)
 }
 
 func main() {
+	enterAltScreen()
+	clearAltScreen()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithWordWrap(120),
 		glamour.WithAutoStyle(),
@@ -44,12 +52,18 @@ func main() {
 		glamour.WithEnvironmentConfig(),
 	)
 
-	enterAltScreen()
-
 	var buf bytes.Buffer
 	var out []byte
 	var lastBufLen int
 	tmp := make([]byte, 4096)
+
+	go func() {
+		<-sigChan
+		leaveAltScreen()
+		clearAltScreen()
+		os.Stdout.Write(out)
+		os.Exit(0)
+	}()
 
 	for {
 		n, err := os.Stdin.Read(tmp)
@@ -60,7 +74,6 @@ func main() {
 			if buf.Len()-lastBufLen >= delta || lastBufLen == 0 {
 				clearAltScreen()
 				out, _ = renderer.RenderBytes(buf.Bytes())
-
 				os.Stdout.Write(out)
 				lastBufLen = buf.Len()
 			}
@@ -71,10 +84,10 @@ func main() {
 		}
 
 		if err != nil {
-			os.Exit(1)
+			break
 		}
 	}
 
-	leaveAltScreen()
-	os.Stdout.Write(out)
+	sigChan <- os.Interrupt
+	select {}
 }
